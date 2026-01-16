@@ -1,0 +1,197 @@
+# MT5 Strategy Reversal Bot Configuration
+
+# Trading Configuration
+trading:
+  symbols:
+    - EURUSD
+    - GBPUSD
+  timeframes:
+    - M15  # 15 minutes
+    - H1   # 1 hour
+    - H4   # 4 hours
+  max_bars: 10000  # Maximum historical bars to fetch
+
+# Data Collection
+data_collection:
+  enabled: true
+  update_interval: 300  # seconds (5 minutes)
+  store_ticks: false
+  store_historical: true
+  database_path: "data/trading_data.db"
+
+# Scheduling
+scheduling:
+  daily_profile_time: "23:55"  # Time to save daily profile (UTC)
+  data_collection_interval: "*/5 * * * *"  # Every 5 minutes (cron format)
+  cleanup_old_data_days: 90  # Keep data for 90 days
+
+# Market Profile
+market_profile:
+  value_area_percentage: 70  # 70% of volume for value area
+  tpo_size: 30  # Time Price Opportunity size in minutes
+  session_start: "09:30"
+  session_end: "16:00"
+
+# Technical Indicators
+indicators:
+  vwap:
+    enabled: true
+    standard_deviations: [1, 2, 3]
+  moving_averages:
+    enabled: true
+    periods: [20, 50, 200]
+    types: ["SMA", "EMA"]
+  rsi:
+    enabled: true
+    period: 14
+    overbought: 70
+    oversold: 30
+  macd:
+    enabled: true
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
+  bollinger_bands:
+    enabled: true
+    period: 20
+    std_dev: 2
+  atr:
+    enabled: true
+    period: 14
+  stochastic:
+    enabled: true
+    k_period: 14
+    d_period: 3
+
+# Pattern Recognition
+patterns:
+  enabled: true
+  min_confidence: 0.65
+  lookback_bars: 100
+  reversal_patterns:
+    - double_top
+    - double_bottom
+    - head_and_shoulders
+    - inverse_head_and_shoulders
+    - triple_top
+    - triple_bottom
+    - rising_wedge
+    - falling_wedge
+
+# Hypothesis Testing
+hypothesis_testing:
+  enabled: true
+  significance_level: 0.05  # Alpha level for statistical tests
+  min_sample_size: 30
+  tests:
+    - t_test
+    - mann_whitney
+    - kolmogorov_smirnov
+  backtesting_window: 252  # Trading days for validation
+
+# Zipline Integration
+zipline:
+  enabled: true
+  data_bundle: "custom-mt5-bundle"
+  capital_base: 10000
+  commission: 0.001  # 0.1%
+  slippage: 0.0005
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file_path: "logs/mt5_bot.log"
+  max_bytes: 10485760  # 10 MB
+  backup_count: 5
+  console_output: true
+
+# Risk Management
+risk:
+  max_position_size: 0.02  # 2% of capital
+  max_daily_loss: 0.05  # 5% of capital
+  max_drawdown: 0.10  # 10% of capital
+
+# Dollar Cost Averaging (DCA)
+dca:
+  enabled: true
+  default_type: "fixed_size"  # fixed_amount, fixed_size, grid, signal_based, time_based
+
+  # Entry parameters
+  initial_size: 0.1  # Initial position size
+  dca_size: 0.1  # Size for each DCA entry
+  max_entries: 5  # Maximum number of DCA entries
+
+  # Fixed amount DCA
+  fixed_amount: 1000.0  # Fixed dollar amount per entry
+
+  # Grid DCA
+  grid_spacing_percent: 1.0  # Spacing between grid levels (%)
+
+  # Time-based DCA
+  time_interval_hours: 24  # Hours between DCA entries
+
+  # Signal-based DCA
+  signal_threshold: 0.7  # Confidence threshold for signals
+
+  # Risk management
+  max_total_size: 0.5  # Maximum total position size
+  stop_loss_percent: 10.0  # Stop loss percentage
+  take_profit_percent: 20.0  # Take profit percentage
+  allow_averaging_down: true
+  max_drawdown_for_dca: 5.0  # Max drawdown % before stopping DCA
+
+  # Dynamic sizing
+  use_dynamic_sizing: false
+  size_multiplier: 1.5  # Multiplier for each DCA entry
+
+# Machine Learning
+machine_learning:
+  enabled: true
+  model_type: "random_forest"  # random_forest, gradient_boosting, both
+
+  # Model parameters
+  random_forest:
+    n_estimators: 100
+    max_depth: 10
+    min_samples_split: 5
+    random_state: 42
+
+  gradient_boosting:
+    n_estimators: 100
+    learning_rate: 0.1
+    max_depth: 5
+    random_state: 42
+
+  # Feature engineering
+  features:
+    # Technical indicators (automatically included)
+    use_indicators: true
+
+    # Rate of change features
+    roc_periods: [5, 10, 20]  # Periods for ROC calculation
+
+    # Slope features
+    slope_periods: [5, 10, 20]  # Periods for slope calculation
+    calculate_slope_acceleration: true  # Rate of change of slope
+
+    # Volume/Flow features
+    use_volume_features: true
+    volume_roc_periods: [5, 10, 20]
+    calculate_volume_acceleration: true
+
+    # Price action features
+    use_price_patterns: true
+    use_support_resistance: true
+
+  # Training
+  train_test_split: 0.8  # 80% train, 20% test
+  lookback_bars: 100  # Bars to use for feature calculation
+  prediction_horizon: 5  # Bars ahead to predict
+
+  # Model evaluation
+  cross_validation_folds: 5
+  feature_importance_threshold: 0.01  # Minimum importance to keep feature
+
+  # Prediction
+  prediction_threshold: 0.6  # Confidence threshold for predictions
+  retrain_frequency_days: 7  # Retrain model every N days

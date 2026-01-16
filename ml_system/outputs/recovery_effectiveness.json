@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-01-06T09:25:23.454394",
+  "note": "Win rates calculated from CLOSED positions only",
+  "grid": {
+    "count": 0,
+    "total_profit": 0,
+    "avg_profit": 0,
+    "win_rate": 0
+  },
+  "dca": {
+    "count": 0,
+    "total_profit": 0,
+    "avg_profit": 0,
+    "win_rate": 0
+  },
+  "hedge": {
+    "count": 0,
+    "total_profit": 0,
+    "avg_profit": 0,
+    "win_rate": 0
+  }
+}

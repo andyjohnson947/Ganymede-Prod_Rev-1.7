@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-01-06T09:25:23.454394",
+  "suggestions": [
+    {
+      "priority": "HIGH",
+      "category": "signal_quality",
+      "issue": "Low overall win rate (54.6%)",
+      "suggestion": "Consider raising confluence score threshold or tightening signal filters"
+    }
+  ]
+}

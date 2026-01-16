@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data & Logs
+data/*.csv
+data/*.db
+data/*.sqlite
+logs/*.log
+*.log
+
+# Configuration (keep examples)
+config/mt5_credentials.yaml
+config/local_*.yaml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Zipline
+~/.zipline/
+
+# Temporary files
+*.tmp
+*.bak
+
+# ML System Generated Reports
+ml_system/reports/daily/*.txt
+ml_system/logs/*.log
+ml_system/outputs/*.jsonl

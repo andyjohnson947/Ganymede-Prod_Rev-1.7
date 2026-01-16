@@ -1,0 +1,5 @@
+Model,CV_Mean,CV_Std,Train_Accuracy,Precision,Recall,F1_Score,ROC_AUC
+Random Forest,0.8888888888888888,0.15713484026367724,1.0,1.0,1.0,1.0,1.0
+Logistic Regression,,,1.0,1.0,1.0,1.0,1.0
+Gradient Boosting,,,1.0,1.0,1.0,1.0,1.0
+XGBoost,,,0.875,0.875,1.0,0.9333333333333333,0.5

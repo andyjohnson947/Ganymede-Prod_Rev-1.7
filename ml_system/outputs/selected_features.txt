@@ -1,0 +1,10 @@
+at_swing_high
+at_swing_low
+adx
+minus_di
+trend_strength
+regime_trending
+regime_strong
+di_spread
+hour
+day_of_week

@@ -1,0 +1,99 @@
+ML SYSTEM DATA QUALITY REPORT
+================================================================================
+Generated: 2026-01-09 09:04:13
+Source: ml_system/outputs/continuous_trade_log.jsonl
+================================================================================
+
+Total trades: 30
+Closed trades: 8
+Win rate: 87.50%
+
+Missing Values:
+ticket               0
+symbol               0
+entry_time           0
+entry_price          0
+direction            0
+volume               0
+confluence_score     0
+vwap                 0
+volume_profile       0
+htf_levels           0
+trend_filter         0
+market_context       0
+logged_at            0
+backfilled           6
+outcome             22
+
+Data Types:
+ticket                        int64
+symbol                       object
+entry_time                   object
+entry_price                 float64
+direction                    object
+volume                      float64
+confluence_score              int64
+vwap                         object
+volume_profile               object
+htf_levels                   object
+trend_filter                 object
+market_context               object
+logged_at                    object
+backfilled                   object
+outcome                      object
+entry_time_parsed    datetime64[ns]
+date                         object
+
+Sample Trade:
+{
+  "ticket": 54473213762,
+  "symbol": "EURUSD",
+  "entry_time": "2025-12-29T06:20:12",
+  "entry_price": 1.17743,
+  "direction": "SELL",
+  "volume": 0.04,
+  "confluence_score": 20,
+  "vwap": {
+    "value": 1.1756163253276843,
+    "distance_pct": 0.17043610480292343,
+    "direction": "above",
+    "in_band_1": true,
+    "in_band_2": false,
+    "band_1_score": 1,
+    "band_2_score": 0
+  },
+  "volume_profile": {
+    "at_poc": true,
+    "above_vah": false,
+    "below_val": false,
+    "at_lvn": true,
+    "at_swing_high": true,
+    "at_swing_low": false
+  },
+  "htf_levels": {
+    "total_score": 10,
+    "factors_matched": [
+      "Prev Day VAH",
+      "Prev Day POC",
+      "Prev Day High",
+      "Daily HVN",
+      "Prev Week High"
+    ],
+    "prev_day_vah": 1.1786316000000001,
+    "prev_day_poc": 1.1761676,
+    "weekly_hvn_count": 5,
+    "weekly_poc": 1.1713479500000001
+  },
+  "trend_filter": {
+    "enabled": true,
+    "adx": 12.815923499615916,
+    "plus_di": 25.24705749379966,
+    "minus_di": 19.483649211170732
+  },
+  "market_context": {
+    "hour": 6,
+    "day_of_week": "Monday"
+  },
+  "logged_at": "2026-01-07T04:46:13.069500",
+  "backfilled": true
+}

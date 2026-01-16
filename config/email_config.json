@@ -1,0 +1,17 @@
+{
+  "enabled": true,
+  "from_email": "andyjohnson947@gmail.com",
+  "to_email": "andyjohnson947@gmail.com",
+  "password": "tpiw dxgw oolb ztje",
+  "smtp_server": "smtp.gmail.com",
+  "smtp_port": 587,
+  "_instructions": [
+    "To enable email reports:",
+    "1. Set 'enabled' to true",
+    "2. Enable 2FA on your Google account: https://myaccount.google.com/security",
+    "3. Create app-specific password: https://myaccount.google.com/apppasswords",
+    "4. Replace YOUR_APP_SPECIFIC_PASSWORD_HERE with the app password",
+    "5. Save this file",
+    "Daily reports will be emailed to andyjohnson947@gmail.com at 8:00 AM"
+  ]
+}

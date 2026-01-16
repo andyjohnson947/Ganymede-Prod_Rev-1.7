@@ -1,0 +1,33 @@
+ML MODEL ANALYSIS REPORT
+================================================================================
+Generated: 2026-01-09 11:16:29
+Model: ml_system/models/baseline_rf.pkl
+Data: ml_system/data/training_data.csv
+================================================================================
+
+PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+Validation Samples: 2
+Accuracy: 100.00%
+
+TOP 10 FEATURES
+--------------------------------------------------------------------------------
+35. di_spread                      0.1509
+28. minus_di                       0.1371
+29. trend_strength                 0.1114
+26. adx                            0.0771
+58. confluence_score               0.0729
+ 1. vwap_distance_pct              0.0629
+27. plus_di                        0.0514
+17. at_prev_day_val                0.0386
+ 8. vwap_band_score                0.0357
+36. hour                           0.0300
+
+FEATURE IMPORTANCE BY CATEGORY
+--------------------------------------------------------------------------------
+Market/Trend        : 0.6080
+Temporal            : 0.1729
+Other               : 0.1221
+HTF Levels          : 0.1143
+VWAP                : 0.1034
+Volume Profile      : 0.0936

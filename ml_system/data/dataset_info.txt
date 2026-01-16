@@ -1,0 +1,104 @@
+ML DATASET INFORMATION
+================================================================================
+Generated: 2026-01-15 07:46:46
+Source: ml_system/outputs/continuous_trade_log.jsonl
+Output: ml_system/data/training_data.csv
+================================================================================
+
+Total samples: 11
+Features: 88
+Win rate: 81.82%
+Wins: 9
+Losses: 2
+
+Feature List:
+   1. vwap_distance_pct
+   2. vwap_band_1
+   3. vwap_band_2
+   4. vwap_band_3
+   5. vwap_above
+   6. vwap_below
+   7. vwap_at
+   8. vwap_band_score
+   9. at_poc
+  10. at_lvn
+  11. above_vah
+  12. below_val
+  13. at_swing_high
+  14. at_swing_low
+  15. htf_total_score
+  16. at_prev_day_vah
+  17. at_prev_day_val
+  18. at_prev_day_poc
+  19. at_prev_day_high
+  20. at_prev_day_low
+  21. at_weekly_hvn
+  22. at_daily_hvn
+  23. at_prev_week_high
+  24. at_prev_week_low
+  25. weekly_hvn_count
+  26. at_daily_bullish_fvg
+  27. at_daily_bearish_fvg
+  28. at_weekly_bullish_fvg
+  29. at_weekly_bearish_fvg
+  30. adx
+  31. plus_di
+  32. minus_di
+  33. trend_strength
+  34. trend_bullish
+  35. trend_bearish
+  36. regime_ranging
+  37. regime_trending
+  38. regime_strong
+  39. di_spread
+  40. hour
+  41. day_of_week
+  42. day_of_month
+  43. session_tokyo
+  44. session_london
+  45. session_ny
+  46. session_sydney
+  47. is_session_open
+  48. is_session_close
+  49. is_overlap
+  50. week_of_year
+  51. had_dca
+  52. dca_count
+  53. had_hedge
+  54. hedge_count
+  55. had_grid
+  56. grid_count
+  57. had_partial_close
+  58. partial_close_count
+  59. total_recovery_volume
+  60. recovery_cost
+  61. partial_profit_contribution
+  62. atr_14
+  63. atr_percentile
+  64. recent_range_pips
+  65. momentum_20_pct
+  66. distance_from_high_pct
+  67. distance_from_low_pct
+  68. distance_to_swing_pct
+  69. htf_aligned
+  70. htf_factors_count
+  71. signal_conviction
+  72. trades_last_hour
+  73. trades_today
+  74. win_streak
+  75. minutes_since_last_trade
+  76. open_position_count
+  77. spread_pips
+  78. spread_percentile
+  79. spread_vs_avg_pct
+  80. slippage_pips
+  81. risk_percent
+  82. position_vs_avg
+  83. account_drawdown
+  84. daily_volume_used
+  85. margin_level_pct
+  86. confluence_score
+  87. direction_sell
+  88. direction_buy
+
+Target Variable: target (0=loss, 1=win)
