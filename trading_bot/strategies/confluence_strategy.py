@@ -47,11 +47,16 @@ class ConfluenceStrategy:
             mt5_manager: MT5Manager instance (already connected)
             test_mode: If True, bypass all time filters for testing
         """
+        print("[DEBUG] ConfluenceStrategy.__init__() starting...", flush=True)
         self.mt5 = mt5_manager
         self.test_mode = test_mode
+        print("[DEBUG] Creating SignalDetector...", flush=True)
         self.signal_detector = SignalDetector()
+        print("[DEBUG] Creating RecoveryManager...", flush=True)
         self.recovery_manager = RecoveryManager()
+        print("[DEBUG] Creating RiskCalculator...", flush=True)
         self.risk_calculator = RiskCalculator()
+        print("[DEBUG] Creating PortfolioManager...", flush=True)
         self.portfolio_manager = PortfolioManager()
 
         # New strategy modules
@@ -81,6 +86,7 @@ class ConfluenceStrategy:
             'hedges_activated': 0,
             'dca_levels_added': 0,
         }
+        print("[DEBUG] ConfluenceStrategy.__init__() completed successfully", flush=True)
 
     def start(self, symbols: List[str]):
         """
@@ -89,6 +95,10 @@ class ConfluenceStrategy:
         Args:
             symbols: List of symbols to trade
         """
+        import sys
+        print("[DEBUG] Entered strategy.start() method", flush=True)
+        sys.stdout.flush()
+
         print("=" * 80)
         print(" CONFLUENCE STRATEGY STARTING")
         print("=" * 80)
