@@ -44,7 +44,7 @@ class ContinuousMLLogger:
     Runs continuously, monitors for new trades, captures data automatically
     """
 
-    def __init__(self, output_dir: str = None):
+    def __init__(self, output_dir: str = None, use_existing_connection: bool = False):
         # Use absolute path based on project root to avoid duplication
         if output_dir is None:
             project_root = Path(__file__).parent.parent
@@ -63,6 +63,8 @@ class ContinuousMLLogger:
         self.volume_profile = VolumeProfile()
         self.htf_levels = HTFLevels()
 
+        # Threading fix: Allow reusing existing MT5 connection from main thread
+        self.use_existing_connection = use_existing_connection
         self.mt5 = None
 
     def _load_logged_tickets(self) -> set:
@@ -79,13 +81,29 @@ class ContinuousMLLogger:
         return logged
 
     def connect_mt5(self, login: int, password: str, server: str) -> bool:
-        """Connect to MT5"""
+        """
+        Connect to MT5
+
+        Threading fix: If use_existing_connection=True, reuses the MT5 connection
+        already initialized in the main thread instead of creating a new one.
+        This prevents MT5 API thread-safety violations.
+        """
         if not MT5_AVAILABLE:
             return False
-        if mt5.initialize() and mt5.login(login, password, server):
-            self.mt5 = mt5
-            return True
-        return False
+
+        if self.use_existing_connection:
+            # Reuse existing MT5 connection from main thread
+            # Don't call mt5.initialize() or mt5.login() again - just use the module
+            if mt5.account_info() is not None:
+                self.mt5 = mt5
+                return True
+            return False
+        else:
+            # Standalone mode: Create new connection (for backwards compatibility)
+            if mt5.initialize() and mt5.login(login, password, server):
+                self.mt5 = mt5
+                return True
+            return False
 
     def fetch_bars_at_time(
         self,
