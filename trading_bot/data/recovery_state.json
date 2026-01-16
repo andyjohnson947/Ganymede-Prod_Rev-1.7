@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-01-16T08:36:51.148288",
+  "timestamp": "2026-01-16T08:56:43.163292",
   "tracked_positions": {
     "54516985613": {
       "ticket": 54516985613,
@@ -4082,24 +4082,6 @@
       "trailing_stop_distance_pips": 0,
       "trailing_stop_price": 0.0,
       "highest_profit_price": 1.16055
-    },
-    "54697712310": {
-      "ticket": 54697712310,
-      "symbol": "EURUSD",
-      "entry_price": 1.16084,
-      "type": "sell",
-      "initial_volume": 0.06,
-      "grid_levels": [],
-      "hedge_tickets": [],
-      "dca_levels": [],
-      "total_volume": 0.06,
-      "max_underwater_pips": 0,
-      "recovery_active": false,
-      "open_time": "2026-01-16T01:50:42.607108+00:00",
-      "last_hedge_time": null,
-      "last_grid_time": null,
-      "is_orphaned": true,
-      "orphan_source": "dca"
     },
     "54697905648": {
       "ticket": 54697905648,
