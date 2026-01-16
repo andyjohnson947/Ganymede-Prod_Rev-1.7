@@ -61,7 +61,9 @@ def start_continuous_logger(login, password, server):
     global _logger_thread, _logger_instance, _logger_running
 
     try:
-        _logger_instance = ContinuousMLLogger()
+        # Threading fix: Reuse existing MT5 connection from main thread
+        # This prevents MT5 API conflicts when connecting in multiple threads
+        _logger_instance = ContinuousMLLogger(use_existing_connection=True)
 
         if not _logger_instance.connect_mt5(login, password, server):
             logger.warning("Failed to connect continuous logger to MT5")
