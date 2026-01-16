@@ -119,19 +119,26 @@ class ConfluenceStrategy:
         # Set initial balance for drawdown tracking
         self.risk_calculator.set_initial_balance(account_info['balance'])
 
-        # CRASH RECOVERY: Try to load saved state first
+        # CRASH RECOVERY: Load saved state and reconcile with MT5 reality
         print("🔄 Initializing crash recovery system...")
         state_loaded = self.recovery_manager.load_state()
 
-        # If no state file, try to reconstruct from MT5 positions
-        if not state_loaded:
-            print(" No saved state - checking for orphaned positions...")
-            all_positions = self.mt5.get_positions()
-            if all_positions and len(all_positions) > 0:
-                print(f"   Found {len(all_positions)} open positions in MT5")
-                # Positions will be discovered and reconstructed in first loop iteration
+        # ALWAYS reconcile with MT5, even if state loaded (critical for crash recovery)
+        print("🔄 Reconciling tracked positions with MT5...")
+        added, removed, validated = self.recovery_manager.reconcile_with_mt5(self.mt5)
+
+        if state_loaded:
+            print(f"[OK] State loaded and reconciled:")
+            print(f"   ✓ Validated: {validated} positions still open")
+            if removed > 0:
+                print(f"   🗑️  Removed: {removed} closed positions")
+            if added > 0:
+                print(f"   ➕ Added: {added} new positions from MT5")
+        else:
+            if added > 0:
+                print(f"[OK] No saved state - discovered {added} MT5 positions")
             else:
-                print("   No open positions - starting fresh")
+                print("[OK] No saved state - starting fresh")
 
         print()
 

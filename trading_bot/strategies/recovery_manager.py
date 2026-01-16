@@ -930,6 +930,74 @@ class RecoveryManager:
             traceback.print_exc()
             return False
 
+    def reconcile_with_mt5(self, mt5_manager) -> tuple:
+        """
+        Reconcile tracked positions with MT5 reality after loading state.
+        Critical for crash recovery - ensures state matches actual open positions.
+
+        Args:
+            mt5_manager: MT5Manager instance for querying positions
+
+        Returns:
+            tuple: (positions_added, positions_removed, positions_validated)
+        """
+        # Get all open positions from MT5 with our magic number
+        mt5_positions = mt5_manager.get_positions()
+        mt5_tickets = {pos['ticket'] for pos in mt5_positions}
+        tracked_tickets = set(self.tracked_positions.keys())
+
+        # Find discrepancies
+        closed_tickets = tracked_tickets - mt5_tickets  # Tracked but closed in MT5
+        new_tickets = mt5_tickets - tracked_tickets      # Open in MT5 but not tracked
+
+        # Remove closed positions from tracking
+        for ticket in closed_tickets:
+            pos = self.tracked_positions[ticket]
+            orphan_str = f" (orphaned {pos.get('orphan_source', 'unknown')})" if pos.get('is_orphaned') else ""
+            print(f"   🗑️  Removed closed: {ticket} ({pos['symbol']} {pos['type']}){orphan_str}")
+            del self.tracked_positions[ticket]
+
+        # Add new MT5 positions to tracking
+        for pos in mt5_positions:
+            if pos['ticket'] in new_tickets:
+                self.tracked_positions[pos['ticket']] = {
+                    'ticket': pos['ticket'],
+                    'symbol': pos['symbol'],
+                    'entry_price': pos['price_open'],
+                    'type': pos['type'],
+                    'initial_volume': pos['volume'],
+                    'grid_levels': [],
+                    'hedge_tickets': [],
+                    'dca_levels': [],
+                    'total_volume': pos['volume'],
+                    'max_underwater_pips': 0,
+                    'recovery_active': False,
+                    'open_time': pos['time'],
+                    'is_orphaned': False,
+                    'last_hedge_time': None,
+                    'last_grid_time': None,
+                }
+                print(f"   ➕ Added new: {pos['ticket']} ({pos['symbol']} {pos['type']} @ {pos['price_open']})")
+
+        # Clean up orphaned positions - convert to standalone
+        orphaned = [
+            (ticket, pos) for ticket, pos in self.tracked_positions.items()
+            if pos.get('is_orphaned', False)
+        ]
+
+        if orphaned:
+            print(f"   ⚠️  Found {len(orphaned)} orphaned recovery positions")
+            for ticket, pos in orphaned:
+                # Convert orphans to standalone positions (parent likely closed)
+                pos['is_orphaned'] = False
+                pos['orphan_source'] = None
+                # Keep recovery data but mark as inactive
+                pos['recovery_active'] = False
+
+        validated = len(tracked_tickets & mt5_tickets)
+
+        return len(new_tickets), len(closed_tickets), validated
+
     def check_grid_trigger(
         self,
         ticket: int,
