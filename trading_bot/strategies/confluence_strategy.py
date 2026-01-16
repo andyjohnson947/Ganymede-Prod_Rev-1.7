@@ -39,17 +39,19 @@ from config.strategy_config import (
 class ConfluenceStrategy:
     """Main trading strategy implementation"""
 
-    def __init__(self, mt5_manager: MT5Manager, test_mode: bool = False):
+    def __init__(self, mt5_manager: MT5Manager, test_mode: bool = False, ml_logger=None):
         """
         Initialize strategy
 
         Args:
             mt5_manager: MT5Manager instance (already connected)
             test_mode: If True, bypass all time filters for testing
+            ml_logger: ContinuousMLLogger instance for trailing stop event logging
         """
         print("[DEBUG] ConfluenceStrategy.__init__() starting...", flush=True)
         self.mt5 = mt5_manager
         self.test_mode = test_mode
+        self.ml_logger = ml_logger  # ML logger for real-time event tracking
         print("[DEBUG] Creating SignalDetector...", flush=True)
         self.signal_detector = SignalDetector()
         print("[DEBUG] Creating RecoveryManager...", flush=True)
@@ -417,10 +419,32 @@ class ConfluenceStrategy:
                                         self.recovery_manager.activate_trailing_stop(ticket, current_price, tp_settings)
                                         print(f"[PC2] Trailing stop activated for {ticket}")
 
+                                        # ML LOGGING: Log PC2 trigger with trailing activation
+                                        if self.ml_logger:
+                                            trailing_distance = tracked_pos.get('trailing_stop_distance_pips', 0)
+                                            trailing_stop_price = tracked_pos.get('trailing_stop_price', 0)
+                                            entry_price = tracked_pos['entry_price']
+                                            self.ml_logger.log_pc2_trigger(
+                                                ticket=ticket,
+                                                symbol=symbol,
+                                                current_price=current_price,
+                                                entry_price=entry_price,
+                                                trailing_distance_pips=trailing_distance,
+                                                trailing_stop_price=trailing_stop_price
+                                            )
+
                                     # Move hardware SL to breakeven (entry price) for protection
                                     entry_price = tracked_pos['entry_price']
                                     if self.mt5.modify_position(ticket, sl=entry_price):
                                         print(f"[PC2] Hardware SL moved to breakeven @ {entry_price:.5f}")
+
+                                        # ML LOGGING: Log SL move to breakeven
+                                        if self.ml_logger:
+                                            self.ml_logger.log_sl_to_breakeven(
+                                                ticket=ticket,
+                                                symbol=symbol,
+                                                breakeven_price=entry_price
+                                            )
 
                                 except Exception as e:
                                     print(f"[WARN] PC2 trigger error for {ticket}: {e}")
@@ -431,7 +455,25 @@ class ConfluenceStrategy:
 
                 # Update trailing stop if active (moves stop with price)
                 if tracked_pos.get('trailing_stop_active'):
+                    # Store old stop for comparison
+                    old_stop = tracked_pos.get('trailing_stop_price', 0)
+
+                    # Update trailing stop
                     self.recovery_manager.update_trailing_stop(ticket, current_price)
+
+                    # Check if stop moved and log the update
+                    new_stop = tracked_pos.get('trailing_stop_price', 0)
+                    if new_stop != old_stop and self.ml_logger:
+                        pip_value = symbol_info.get('point', 0.0001)
+                        pips_moved = abs(new_stop - old_stop) / (pip_value * 10)
+                        self.ml_logger.log_trailing_update(
+                            ticket=ticket,
+                            symbol=symbol,
+                            old_stop=old_stop,
+                            new_stop=new_stop,
+                            current_price=current_price,
+                            pips_moved=pips_moved
+                        )
 
                     # Update hardware SL to match software trailing stop (crash protection)
                     trailing_stop_price = tracked_pos.get('trailing_stop_price')
@@ -441,6 +483,20 @@ class ConfluenceStrategy:
                     # Check if trailing stop hit
                     if self.recovery_manager.check_trailing_stop(ticket, current_price):
                         print(f"[TRAIL] Trailing stop hit for {ticket} - closing position")
+
+                        # ML LOGGING: Log trailing stop hit with peak price and capture ratio
+                        if self.ml_logger:
+                            entry_price = tracked_pos.get('entry_price', current_price)
+                            peak_price = tracked_pos.get('highest_profit_price', current_price)
+                            self.ml_logger.log_trailing_hit(
+                                ticket=ticket,
+                                symbol=symbol,
+                                trailing_stop_price=trailing_stop_price,
+                                current_price=current_price,
+                                entry_price=entry_price,
+                                peak_price=peak_price
+                            )
+
                         if self.mt5.close_position(ticket):
                             self.recovery_manager.untrack_position(ticket)
                             self.stats['trades_closed'] += 1
