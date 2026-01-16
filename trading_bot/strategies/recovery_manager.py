@@ -182,7 +182,8 @@ class RecoveryManager:
 
     def __init__(self):
         """Initialize recovery manager"""
-        self.tracked_positions = {}  # Track positions and their recovery state
+        self.tracked_positions = {}  # Track active positions and their recovery state
+        self.archived_positions = []  # Archive closed positions for ML analysis (last 100)
 
         # Thread locks for atomic hedge operations (prevents race conditions)
         self.hedge_locks = {}  # Dict[int, threading.Lock] - one lock per position
@@ -740,6 +741,55 @@ class RecoveryManager:
 
         return stats
 
+    def _convert_position_datetimes(self, position: dict) -> dict:
+        """
+        Convert all datetime objects in position to ISO strings for JSON serialization.
+        This ensures Windows-safe UTF-8 encoding without datetime serialization errors.
+
+        Args:
+            position: Position dictionary potentially containing datetime objects
+
+        Returns:
+            dict: Position dictionary with all datetime objects converted to ISO strings
+        """
+        pos_data = position.copy()
+
+        # Convert top-level datetime fields
+        if 'open_time' in pos_data and pos_data['open_time']:
+            if isinstance(pos_data['open_time'], datetime):
+                pos_data['open_time'] = pos_data['open_time'].isoformat()
+
+        if 'closed_time' in pos_data and pos_data['closed_time']:
+            if isinstance(pos_data['closed_time'], datetime):
+                pos_data['closed_time'] = pos_data['closed_time'].isoformat()
+
+        # Convert cooldown timer fields
+        if 'last_hedge_time' in pos_data and pos_data['last_hedge_time']:
+            if isinstance(pos_data['last_hedge_time'], datetime):
+                pos_data['last_hedge_time'] = pos_data['last_hedge_time'].isoformat()
+
+        if 'last_grid_time' in pos_data and pos_data['last_grid_time']:
+            if isinstance(pos_data['last_grid_time'], datetime):
+                pos_data['last_grid_time'] = pos_data['last_grid_time'].isoformat()
+
+        # Convert time fields in recovery orders (modify in-place since we already copied)
+        for grid in pos_data.get('grid_levels', []):
+            if 'time' in grid and grid['time']:
+                if isinstance(grid['time'], datetime):
+                    grid['time'] = grid['time'].isoformat()
+
+        for hedge in pos_data.get('hedge_tickets', []):
+            if 'time' in hedge and hedge['time']:
+                if isinstance(hedge['time'], datetime):
+                    hedge['time'] = hedge['time'].isoformat()
+
+        for dca in pos_data.get('dca_levels', []):
+            if 'time' in dca and dca['time']:
+                if isinstance(dca['time'], datetime):
+                    dca['time'] = dca['time'].isoformat()
+
+        return pos_data
+
     def save_state(self, state_file: str = "data/recovery_state.json") -> bool:
         """
         Save current tracking state to JSON file for crash recovery.
@@ -754,46 +804,21 @@ class RecoveryManager:
             state_path = Path(state_file)
             state_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Prepare state data
+            # Prepare state data (active + archived)
             state = {
+                'version': '2.0',  # Version for future compatibility
                 'timestamp': datetime.now().isoformat(),
-                'tracked_positions': {}
+                'tracked_positions': {},
+                'archived_positions': []  # Last 100 closed positions for ML
             }
 
             # Convert tracked positions to JSON-serializable format
             for ticket, position in self.tracked_positions.items():
-                # Convert datetime objects to ISO strings
-                pos_data = position.copy()
-                if 'open_time' in pos_data and pos_data['open_time']:
-                    if isinstance(pos_data['open_time'], datetime):
-                        pos_data['open_time'] = pos_data['open_time'].isoformat()
-
-                # Convert cooldown timer fields (added for race condition fix)
-                if 'last_hedge_time' in pos_data and pos_data['last_hedge_time']:
-                    if isinstance(pos_data['last_hedge_time'], datetime):
-                        pos_data['last_hedge_time'] = pos_data['last_hedge_time'].isoformat()
-
-                if 'last_grid_time' in pos_data and pos_data['last_grid_time']:
-                    if isinstance(pos_data['last_grid_time'], datetime):
-                        pos_data['last_grid_time'] = pos_data['last_grid_time'].isoformat()
-
-                # Convert time fields in recovery orders
-                for grid in pos_data.get('grid_levels', []):
-                    if 'time' in grid and grid['time']:
-                        if isinstance(grid['time'], datetime):
-                            grid['time'] = grid['time'].isoformat()
-
-                for hedge in pos_data.get('hedge_tickets', []):
-                    if 'time' in hedge and hedge['time']:
-                        if isinstance(hedge['time'], datetime):
-                            hedge['time'] = hedge['time'].isoformat()
-
-                for dca in pos_data.get('dca_levels', []):
-                    if 'time' in dca and dca['time']:
-                        if isinstance(dca['time'], datetime):
-                            dca['time'] = dca['time'].isoformat()
-
+                pos_data = self._convert_position_datetimes(position)
                 state['tracked_positions'][str(ticket)] = pos_data
+
+            # Add archived positions (already converted during archival in reconcile_with_mt5)
+            state['archived_positions'] = self.archived_positions
 
             # Convert numpy types to native Python types
             state = convert_numpy_types(state)
@@ -919,7 +944,15 @@ class RecoveryManager:
                 self.tracked_positions[ticket] = pos_data
                 restored_count += 1
 
+            # Load archived positions (v2.0+, backward compatible)
+            archived_count = 0
+            if 'archived_positions' in state:
+                self.archived_positions = state['archived_positions']
+                archived_count = len(self.archived_positions)
+
             print(f"[OK] Restored {restored_count} tracked positions from state file")
+            if archived_count > 0:
+                print(f"[OK] Loaded {archived_count} archived closed positions")
             print()
 
             return True
@@ -929,6 +962,93 @@ class RecoveryManager:
             import traceback
             traceback.print_exc()
             return False
+
+    def reconcile_with_mt5(self, mt5_manager) -> tuple:
+        """
+        Reconcile tracked positions with MT5 reality after loading state.
+        Critical for crash recovery - ensures state matches actual open positions.
+
+        Args:
+            mt5_manager: MT5Manager instance for querying positions
+
+        Returns:
+            tuple: (positions_added, positions_removed, positions_validated)
+        """
+        # Get all open positions from MT5 with our magic number
+        mt5_positions = mt5_manager.get_positions()
+        mt5_tickets = {pos['ticket'] for pos in mt5_positions}
+        tracked_tickets = set(self.tracked_positions.keys())
+
+        # Find discrepancies
+        closed_tickets = tracked_tickets - mt5_tickets  # Tracked but closed in MT5
+        new_tickets = mt5_tickets - tracked_tickets      # Open in MT5 but not tracked
+
+        # Archive closed positions (don't delete - preserve ML data)
+        for ticket in closed_tickets:
+            pos = self.tracked_positions[ticket]
+            orphan_str = f" (orphaned {pos.get('orphan_source', 'unknown')})" if pos.get('is_orphaned') else ""
+
+            # Add closure metadata
+            pos['closed_time'] = get_current_time()  # datetime object (will be converted)
+            pos['status'] = 'closed'
+
+            # Convert all datetime objects to ISO strings for JSON serialization
+            pos_serializable = self._convert_position_datetimes(pos)
+
+            # Archive for ML analysis (now safe for JSON)
+            self.archived_positions.append(pos_serializable)
+
+            # Remove from active tracking
+            del self.tracked_positions[ticket]
+
+            print(f"   📦 Archived closed: {ticket} ({pos['symbol']} {pos['type']}){orphan_str}")
+
+        # Prune archive to last 100 positions (keep state file manageable)
+        if len(self.archived_positions) > 100:
+            removed_count = len(self.archived_positions) - 100
+            self.archived_positions = self.archived_positions[-100:]
+            print(f"   🧹 Pruned {removed_count} old archived positions (keeping last 100)")
+
+        # Add new MT5 positions to tracking
+        for pos in mt5_positions:
+            if pos['ticket'] in new_tickets:
+                self.tracked_positions[pos['ticket']] = {
+                    'ticket': pos['ticket'],
+                    'symbol': pos['symbol'],
+                    'entry_price': pos['price_open'],
+                    'type': pos['type'],
+                    'initial_volume': pos['volume'],
+                    'grid_levels': [],
+                    'hedge_tickets': [],
+                    'dca_levels': [],
+                    'total_volume': pos['volume'],
+                    'max_underwater_pips': 0,
+                    'recovery_active': False,
+                    'open_time': pos['time'],
+                    'is_orphaned': False,
+                    'last_hedge_time': None,
+                    'last_grid_time': None,
+                }
+                print(f"   ➕ Added new: {pos['ticket']} ({pos['symbol']} {pos['type']} @ {pos['price_open']})")
+
+        # Clean up orphaned positions - convert to standalone
+        orphaned = [
+            (ticket, pos) for ticket, pos in self.tracked_positions.items()
+            if pos.get('is_orphaned', False)
+        ]
+
+        if orphaned:
+            print(f"   ⚠️  Found {len(orphaned)} orphaned recovery positions")
+            for ticket, pos in orphaned:
+                # Convert orphans to standalone positions (parent likely closed)
+                pos['is_orphaned'] = False
+                pos['orphan_source'] = None
+                # Keep recovery data but mark as inactive
+                pos['recovery_active'] = False
+
+        validated = len(tracked_tickets & mt5_tickets)
+
+        return len(new_tickets), len(closed_tickets), validated
 
     def check_grid_trigger(
         self,

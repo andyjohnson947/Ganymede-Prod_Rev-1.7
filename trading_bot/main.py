@@ -272,7 +272,9 @@ def main():
 
     try:
         # Initialize strategy
+        logger.info("[DEBUG] Creating ConfluenceStrategy instance...")
         strategy = ConfluenceStrategy(mt5_manager, test_mode=args.test_mode)
+        logger.info("[DEBUG] ConfluenceStrategy created successfully")
 
         # Show test mode warning if enabled
         if args.test_mode:
@@ -282,8 +284,9 @@ def main():
             print()
 
         # Start trading
-        logger.info(f"Starting strategy with symbols: {symbols}")
+        logger.info(f"[DEBUG] Calling strategy.start() with symbols: {symbols}")
         strategy.start(symbols)
+        logger.info("[DEBUG] strategy.start() returned")
 
     except KeyboardInterrupt:
         print("\n\n[WARN]  Interrupted by user")
