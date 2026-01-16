@@ -182,7 +182,8 @@ class RecoveryManager:
 
     def __init__(self):
         """Initialize recovery manager"""
-        self.tracked_positions = {}  # Track positions and their recovery state
+        self.tracked_positions = {}  # Track active positions and their recovery state
+        self.archived_positions = []  # Archive closed positions for ML analysis (last 100)
 
         # Thread locks for atomic hedge operations (prevents race conditions)
         self.hedge_locks = {}  # Dict[int, threading.Lock] - one lock per position
@@ -754,10 +755,12 @@ class RecoveryManager:
             state_path = Path(state_file)
             state_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Prepare state data
+            # Prepare state data (active + archived)
             state = {
+                'version': '2.0',  # Version for future compatibility
                 'timestamp': datetime.now().isoformat(),
-                'tracked_positions': {}
+                'tracked_positions': {},
+                'archived_positions': []  # Last 100 closed positions for ML
             }
 
             # Convert tracked positions to JSON-serializable format
@@ -794,6 +797,9 @@ class RecoveryManager:
                             dca['time'] = dca['time'].isoformat()
 
                 state['tracked_positions'][str(ticket)] = pos_data
+
+            # Add archived positions (already converted, no datetime objects)
+            state['archived_positions'] = self.archived_positions
 
             # Convert numpy types to native Python types
             state = convert_numpy_types(state)
@@ -919,7 +925,15 @@ class RecoveryManager:
                 self.tracked_positions[ticket] = pos_data
                 restored_count += 1
 
+            # Load archived positions (v2.0+, backward compatible)
+            archived_count = 0
+            if 'archived_positions' in state:
+                self.archived_positions = state['archived_positions']
+                archived_count = len(self.archived_positions)
+
             print(f"[OK] Restored {restored_count} tracked positions from state file")
+            if archived_count > 0:
+                print(f"[OK] Loaded {archived_count} archived closed positions")
             print()
 
             return True
@@ -950,12 +964,28 @@ class RecoveryManager:
         closed_tickets = tracked_tickets - mt5_tickets  # Tracked but closed in MT5
         new_tickets = mt5_tickets - tracked_tickets      # Open in MT5 but not tracked
 
-        # Remove closed positions from tracking
+        # Archive closed positions (don't delete - preserve ML data)
         for ticket in closed_tickets:
             pos = self.tracked_positions[ticket]
             orphan_str = f" (orphaned {pos.get('orphan_source', 'unknown')})" if pos.get('is_orphaned') else ""
-            print(f"   🗑️  Removed closed: {ticket} ({pos['symbol']} {pos['type']}){orphan_str}")
+
+            # Add closure metadata
+            pos['closed_time'] = get_current_time().isoformat()
+            pos['status'] = 'closed'
+
+            # Archive for ML analysis
+            self.archived_positions.append(pos)
+
+            # Remove from active tracking
             del self.tracked_positions[ticket]
+
+            print(f"   📦 Archived closed: {ticket} ({pos['symbol']} {pos['type']}){orphan_str}")
+
+        # Prune archive to last 100 positions (keep state file manageable)
+        if len(self.archived_positions) > 100:
+            removed_count = len(self.archived_positions) - 100
+            self.archived_positions = self.archived_positions[-100:]
+            print(f"   🧹 Pruned {removed_count} old archived positions (keeping last 100)")
 
         # Add new MT5 positions to tracking
         for pos in mt5_positions:
