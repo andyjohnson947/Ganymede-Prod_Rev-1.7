@@ -75,16 +75,17 @@ def start_continuous_logger_with_backfill(login, password, server):
         logger.info("[OK] Continuous logger connected")
         logger.info("[INFO] Tracking: Entry + Recovery (DCA/Hedge) + Grid + Partials")
 
+        # TEMPORARILY DISABLED: Backfill may be corrupting MT5 connection
         # Run backfill SYNCHRONOUSLY in main thread (no threading conflicts)
-        logger.info("[INFO] Checking for missed trades...")
-        try:
-            _logger_instance.backfill_missed_trades()
-            logger.info("[OK] Backfill completed")
-        except Exception as e:
-            logger.error(f"[ERROR] Backfill failed: {e}")
-            import traceback
-            traceback.print_exc()
-            logger.info("[INFO] Continuing without backfill...")
+        logger.info("[INFO] Skipping backfill (disabled for testing)")
+        # try:
+        #     _logger_instance.backfill_missed_trades()
+        #     logger.info("[OK] Backfill completed")
+        # except Exception as e:
+        #     logger.error(f"[ERROR] Backfill failed: {e}")
+        #     import traceback
+        #     traceback.print_exc()
+        #     logger.info("[INFO] Continuing without backfill...")
 
         # Note: Background monitoring disabled to prevent MT5 API threading conflicts
         # The strategy will handle trade execution, logger captures historical data
