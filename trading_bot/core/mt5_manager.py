@@ -20,7 +20,7 @@ from config.strategy_config import (
 class MT5Manager:
     """Manages MT5 connection, data fetching, and order execution"""
 
-    def __init__(self, login: int, password: str, server: str):
+    def __init__(self, login: int, password: str, server: str, api_lock=None):
         """
         Initialize MT5 Manager
 
@@ -28,12 +28,14 @@ class MT5Manager:
             login: MT5 account login
             password: MT5 account password
             server: MT5 server name
+            api_lock: Optional threading.Lock for thread-safe MT5 API access
         """
         self.login = login
         self.password = password
         self.server = server
         self.connected = False
         self.magic_number = MT5_MAGIC_NUMBER
+        self.api_lock = api_lock  # Thread-safe access lock
 
     def connect(self) -> bool:
         """
@@ -70,6 +72,13 @@ class MT5Manager:
             self.connected = False
             print("[OK] Disconnected from MT5")
 
+    def _with_lock(self, func):
+        """Helper to conditionally use lock for thread-safe MT5 API access"""
+        if self.api_lock:
+            with self.api_lock:
+                return func()
+        return func()
+
     def get_account_info(self) -> Optional[Dict]:
         """
         Get current account information
@@ -80,19 +89,22 @@ class MT5Manager:
         if not self.connected:
             return None
 
-        info = mt5.account_info()
-        if info is None:
-            return None
+        def _get_info():
+            info = mt5.account_info()
+            if info is None:
+                return None
 
-        return {
-            'balance': info.balance,
-            'equity': info.equity,
-            'margin': info.margin,
-            'free_margin': info.margin_free,
-            'margin_level': info.margin_level if info.margin > 0 else 0,
-            'profit': info.profit,
-            'currency': info.currency
-        }
+            return {
+                'balance': info.balance,
+                'equity': info.equity,
+                'margin': info.margin,
+                'free_margin': info.margin_free,
+                'margin_level': info.margin_level if info.margin > 0 else 0,
+                'profit': info.profit,
+                'currency': info.currency
+            }
+
+        return self._with_lock(_get_info)
 
     def get_historical_data(
         self,
@@ -176,35 +188,38 @@ class MT5Manager:
         if not self.connected:
             return []
 
-        if symbol:
-            positions = mt5.positions_get(symbol=symbol)
-        else:
-            positions = mt5.positions_get()
+        def _get_positions():
+            if symbol:
+                positions = mt5.positions_get(symbol=symbol)
+            else:
+                positions = mt5.positions_get()
 
-        if positions is None:
-            return []
+            if positions is None:
+                return []
 
-        result = []
-        for pos in positions:
-            # Only include positions opened by this bot
-            if pos.magic != self.magic_number:
-                continue
+            result = []
+            for pos in positions:
+                # Only include positions opened by this bot
+                if pos.magic != self.magic_number:
+                    continue
 
-            result.append({
-                'ticket': pos.ticket,
-                'symbol': pos.symbol,
-                'type': 'buy' if pos.type == mt5.ORDER_TYPE_BUY else 'sell',
-                'volume': pos.volume,
-                'price_open': pos.price_open,
-                'price_current': pos.price_current,
-                'profit': pos.profit,
-                'sl': pos.sl,
-                'tp': pos.tp,
-                'time': datetime.fromtimestamp(pos.time),
-                'comment': pos.comment
-            })
+                result.append({
+                    'ticket': pos.ticket,
+                    'symbol': pos.symbol,
+                    'type': 'buy' if pos.type == mt5.ORDER_TYPE_BUY else 'sell',
+                    'volume': pos.volume,
+                    'price_open': pos.price_open,
+                    'price_current': pos.price_current,
+                    'profit': pos.profit,
+                    'sl': pos.sl,
+                    'tp': pos.tp,
+                    'time': datetime.fromtimestamp(pos.time),
+                    'comment': pos.comment
+                })
 
-        return result
+            return result
+
+        return self._with_lock(_get_positions)
 
     def place_order(
         self,
