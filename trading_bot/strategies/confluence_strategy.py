@@ -419,6 +419,10 @@ class ConfluenceStrategy:
                                         self.recovery_manager.activate_trailing_stop(ticket, current_price, tp_settings)
                                         print(f"[PC2] Trailing stop activated for {ticket}")
 
+                                        # Set PC2 trigger time for 60-min time limit
+                                        from utils.time_utils import get_current_time
+                                        tracked_pos['pc2_trigger_time'] = get_current_time()
+
                                         # ML LOGGING: Log PC2 trigger with trailing activation
                                         if self.ml_logger:
                                             trailing_distance = tracked_pos.get('trailing_stop_distance_pips', 0)
@@ -452,6 +456,32 @@ class ConfluenceStrategy:
             # TRAILING STOP SYSTEM: Check and update trailing stops for tracked positions
             if ticket in self.recovery_manager.tracked_positions:
                 tracked_pos = self.recovery_manager.tracked_positions[ticket]
+
+                # Check PC2 time limit (60 min) - close remaining 50% if time elapsed
+                pc2_time = tracked_pos.get('pc2_trigger_time')
+                if pc2_time and tracked_pos.get('trailing_stop_active'):
+                    from utils.time_utils import get_current_time
+                    from datetime import timedelta
+                    time_since_pc2 = get_current_time() - pc2_time
+                    if time_since_pc2 >= timedelta(minutes=60):
+                        print(f"[PC2 TIME LIMIT] 60 min elapsed since PC2 for {ticket} - closing position")
+                        if self.mt5.close_position(ticket):
+                            # ML LOGGING: Log time-based exit
+                            if self.ml_logger:
+                                entry_price = tracked_pos.get('entry_price', current_price)
+                                peak_price = tracked_pos.get('highest_profit_price', current_price)
+                                self.ml_logger.log_trailing_event(
+                                    event_type='pc2_time_limit',
+                                    ticket=ticket,
+                                    symbol=symbol,
+                                    time_since_pc2_minutes=float(time_since_pc2.total_seconds() / 60),
+                                    exit_price=float(current_price),
+                                    entry_price=float(entry_price),
+                                    peak_price=float(peak_price)
+                                )
+                            self.recovery_manager.untrack_position(ticket)
+                            self.stats['trades_closed'] += 1
+                        continue
 
                 # Update trailing stop if active (moves stop with price)
                 if tracked_pos.get('trailing_stop_active'):

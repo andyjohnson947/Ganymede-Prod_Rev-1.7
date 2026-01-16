@@ -255,6 +255,7 @@ class RecoveryManager:
             # Partial profit tracking
             'partial_1_closed': False,
             'partial_2_closed': False,
+            'pc2_trigger_time': None,  # Track when PC2 triggers for time-based exit (60 min limit)
             # Trailing stop (activated after PC2)
             'trailing_stop_active': False,
             'trailing_stop_distance_pips': 0,
