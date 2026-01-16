@@ -54,13 +54,17 @@ import threading
 _logger_thread = None
 _logger_instance = None
 _logger_running = False
+_backfill_complete = threading.Event()  # Signal when backfill is done
 
 
 def start_continuous_logger(login, password, server):
     """Start continuous ML logger in background thread"""
-    global _logger_thread, _logger_instance, _logger_running
+    global _logger_thread, _logger_instance, _logger_running, _backfill_complete
 
     try:
+        # Reset backfill event
+        _backfill_complete.clear()
+
         # Threading fix: Reuse existing MT5 connection from main thread
         # This prevents MT5 API conflicts when connecting in multiple threads
         _logger_instance = ContinuousMLLogger(use_existing_connection=True)
@@ -73,7 +77,7 @@ def start_continuous_logger(login, password, server):
 
         # Run logger in background thread
         def logger_worker():
-            global _logger_running
+            global _logger_running, _backfill_complete
             try:
                 logger.info("[OK] Continuous logger connected")
                 logger.info("[INFO] Tracking: Entry + Recovery (DCA/Hedge) + Grid + Partials")
@@ -90,6 +94,9 @@ def start_continuous_logger(login, password, server):
                     import traceback
                     traceback.print_exc()
                     logger.info("[INFO] Continuing without backfill...")
+                finally:
+                    # Signal that backfill is complete (success or failure)
+                    _backfill_complete.set()
 
                 while _logger_running:
                     try:
@@ -252,6 +259,10 @@ def main():
     logger.info("Starting Continuous Trade Logger...")
     if start_continuous_logger(args.login, args.password, args.server):
         logger.info("[OK] Continuous logger started (60s check interval)")
+        # Wait for backfill to complete before starting strategy
+        # This prevents MT5 API conflicts between threads
+        logger.info("[INFO] Waiting for backfill to complete...")
+        _backfill_complete.wait(timeout=120)  # Wait max 2 minutes
     else:
         logger.warning("[WARN] Continuing without continuous logger")
 
