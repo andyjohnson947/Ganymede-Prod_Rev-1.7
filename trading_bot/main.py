@@ -271,9 +271,9 @@ def main():
             sys.exit(1)
 
     try:
-        # Initialize strategy
+        # Initialize strategy with ML logger for trailing stop monitoring
         logger.info("[DEBUG] Creating ConfluenceStrategy instance...")
-        strategy = ConfluenceStrategy(mt5_manager, test_mode=args.test_mode)
+        strategy = ConfluenceStrategy(mt5_manager, test_mode=args.test_mode, ml_logger=_logger_instance)
         logger.info("[DEBUG] ConfluenceStrategy created successfully")
 
         # Show test mode warning if enabled

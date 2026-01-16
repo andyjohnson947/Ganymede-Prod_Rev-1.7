@@ -1261,6 +1261,142 @@ class ContinuousMLLogger:
         if new_trades_logged > 0:
             print(f"[OK] Logged {new_trades_logged} new trades")
 
+    def log_trailing_event(self, event_type: str, ticket: int, symbol: str, **kwargs):
+        """
+        Log real-time trailing stop events for ML monitoring.
+
+        Events tracked:
+        - pc2_trigger: When PC2 closes and trailing activates
+        - sl_to_breakeven: When hardware SL moves to breakeven
+        - trailing_update: When trailing stop moves with price
+        - trailing_hit: When trailing stop closes position
+
+        Args:
+            event_type: Type of event (pc2_trigger, sl_to_breakeven, trailing_update, trailing_hit)
+            ticket: Position ticket
+            symbol: Trading symbol
+            **kwargs: Event-specific data
+        """
+        try:
+            # Create events log if it doesn't exist
+            events_log = self.output_dir / "trailing_stop_events.jsonl"
+
+            event_record = {
+                'event_type': event_type,
+                'ticket': ticket,
+                'symbol': symbol,
+                'timestamp': datetime.now().isoformat(),
+                **kwargs  # Include all additional event data
+            }
+
+            # Convert numpy types
+            event_record = convert_numpy_types(event_record)
+
+            # Append to events log
+            with open(events_log, 'a', encoding='utf-8', errors='ignore') as f:
+                f.write(json.dumps(event_record) + '\n')
+
+        except Exception as e:
+            print(f"[WARN] [LOGGER] Failed to log trailing event for {ticket}: {e}")
+
+    def log_pc2_trigger(self, ticket: int, symbol: str, current_price: float,
+                        entry_price: float, trailing_distance_pips: float,
+                        trailing_stop_price: float):
+        """
+        Log when PC2 triggers (25% close, trailing activates, SL to BE).
+
+        Args:
+            ticket: Position ticket
+            symbol: Trading symbol
+            current_price: Current market price
+            entry_price: Entry price (will become new SL)
+            trailing_distance_pips: ATR-based trailing distance
+            trailing_stop_price: Initial trailing stop price
+        """
+        profit_pips = abs(current_price - entry_price) * 10000
+        self.log_trailing_event(
+            event_type='pc2_trigger',
+            ticket=ticket,
+            symbol=symbol,
+            current_price=float(current_price),
+            entry_price=float(entry_price),
+            profit_pips=float(profit_pips),
+            trailing_distance_pips=float(trailing_distance_pips),
+            trailing_stop_price=float(trailing_stop_price),
+            sl_moved_to_breakeven=True
+        )
+
+    def log_sl_to_breakeven(self, ticket: int, symbol: str, breakeven_price: float):
+        """
+        Log when hardware SL moves to breakeven at PC2.
+
+        Args:
+            ticket: Position ticket
+            symbol: Trading symbol
+            breakeven_price: Breakeven price (entry price)
+        """
+        self.log_trailing_event(
+            event_type='sl_to_breakeven',
+            ticket=ticket,
+            symbol=symbol,
+            breakeven_price=float(breakeven_price)
+        )
+
+    def log_trailing_update(self, ticket: int, symbol: str, old_stop: float,
+                            new_stop: float, current_price: float, pips_moved: float):
+        """
+        Log when trailing stop moves up with price.
+
+        Args:
+            ticket: Position ticket
+            symbol: Trading symbol
+            old_stop: Previous stop price
+            new_stop: New stop price
+            current_price: Current market price
+            pips_moved: How many pips the stop moved
+        """
+        self.log_trailing_event(
+            event_type='trailing_update',
+            ticket=ticket,
+            symbol=symbol,
+            old_stop=float(old_stop),
+            new_stop=float(new_stop),
+            current_price=float(current_price),
+            pips_moved=float(pips_moved)
+        )
+
+    def log_trailing_hit(self, ticket: int, symbol: str, trailing_stop_price: float,
+                         current_price: float, entry_price: float, peak_price: float):
+        """
+        Log when trailing stop is hit and position closes.
+
+        Args:
+            ticket: Position ticket
+            symbol: Trading symbol
+            trailing_stop_price: Trailing stop price that was hit
+            current_price: Price when stop hit
+            entry_price: Original entry price
+            peak_price: Highest profitable price reached
+        """
+        final_pips = abs(current_price - entry_price) * 10000
+        peak_pips = abs(peak_price - entry_price) * 10000
+        pips_from_peak = peak_pips - final_pips
+        capture_ratio = final_pips / peak_pips if peak_pips > 0 else 0
+
+        self.log_trailing_event(
+            event_type='trailing_hit',
+            ticket=ticket,
+            symbol=symbol,
+            trailing_stop_price=float(trailing_stop_price),
+            exit_price=float(current_price),
+            entry_price=float(entry_price),
+            peak_price=float(peak_price),
+            final_pips=float(final_pips),
+            peak_pips=float(peak_pips),
+            pips_from_peak=float(pips_from_peak),
+            capture_ratio=float(capture_ratio)
+        )
+
     def run(self, mt5_login: int, mt5_password: str, mt5_server: str, check_interval: int = 60):
         """
         Run continuous logging service

@@ -39,17 +39,19 @@ from config.strategy_config import (
 class ConfluenceStrategy:
     """Main trading strategy implementation"""
 
-    def __init__(self, mt5_manager: MT5Manager, test_mode: bool = False):
+    def __init__(self, mt5_manager: MT5Manager, test_mode: bool = False, ml_logger=None):
         """
         Initialize strategy
 
         Args:
             mt5_manager: MT5Manager instance (already connected)
             test_mode: If True, bypass all time filters for testing
+            ml_logger: ContinuousMLLogger instance for trailing stop event logging
         """
         print("[DEBUG] ConfluenceStrategy.__init__() starting...", flush=True)
         self.mt5 = mt5_manager
         self.test_mode = test_mode
+        self.ml_logger = ml_logger  # ML logger for real-time event tracking
         print("[DEBUG] Creating SignalDetector...", flush=True)
         self.signal_detector = SignalDetector()
         print("[DEBUG] Creating RecoveryManager...", flush=True)
@@ -346,9 +348,25 @@ class ConfluenceStrategy:
             symbol_info = self.mt5.get_symbol_info(symbol)
             pip_value = symbol_info.get('point', 0.0001)
 
-            # PARTIAL CLOSE: Apply to ALL profitable positions (original + grid + DCA)
-            # This runs for ALL positions, not just tracked ones
-            if self.partial_close_manager and position['profit'] > 0:
+            # PARTIAL CLOSE + TRAILING STOP: ONLY for profitable ORIGINAL positions
+            # NOT for recovery orders (grid/DCA/hedge) or positions in active recovery
+            # This is the new exit strategy for positive trades moving toward TP
+
+            # Check if this is a recovery order (grid/DCA/hedge)
+            is_recovery_order = any([
+                'Grid' in comment,
+                'Hedge' in comment,
+                'DCA' in comment,
+            ])
+
+            # Check if position is in active recovery (has underwater recovery stack)
+            has_active_recovery = False
+            if ticket in self.recovery_manager.tracked_positions:
+                tracked_pos = self.recovery_manager.tracked_positions[ticket]
+                has_active_recovery = tracked_pos.get('recovery_active', False)
+
+            # ONLY apply to positive original positions without active recovery
+            if self.partial_close_manager and position['profit'] > 0 and not is_recovery_order and not has_active_recovery:
                 # Track position if not already tracked
                 if ticket not in self.partial_close_manager.partial_closes:
                     # Calculate TP price based on VWAP or other exit logic
@@ -383,7 +401,8 @@ class ConfluenceStrategy:
                 if partial_action:
                     # Execute partial close
                     close_volume = partial_action['close_volume']
-                    print(f" Partial close: {ticket} - {partial_action['close_percent']}% at {partial_action['level_percent']}% to TP")
+                    level_percent = partial_action['level_percent']
+                    print(f" Partial close: {ticket} - {partial_action['close_percent']}% at {level_percent}% to TP")
 
                     # Check if close_volume equals or exceeds position volume (final close)
                     if close_volume >= position['volume']:
@@ -401,9 +420,156 @@ class ConfluenceStrategy:
                         if self.mt5.close_partial_position(ticket, close_volume, comment=partial_comment):
                             print(f"[OK] Partial close successful: {close_volume} lots - {partial_comment}")
 
-            # RECOVERY & EXIT CONDITIONS: Only for tracked original positions
+                            # PC2 TRIGGERS: Activate trailing stop + move SL to breakeven
+                            if level_percent >= 50 and ticket in self.recovery_manager.tracked_positions:
+                                tracked_pos = self.recovery_manager.tracked_positions[ticket]
+
+                                # Get instrument config for trailing settings
+                                try:
+                                    from trading_bot.portfolio.instruments_config import INSTRUMENTS
+                                    instrument_config = INSTRUMENTS.get(symbol, {})
+                                    tp_settings = instrument_config.get('take_profit', {})
+
+                                    # Activate trailing stop if enabled
+                                    if tp_settings.get('trailing_stop_enabled') and not tracked_pos.get('trailing_stop_active'):
+                                        self.recovery_manager.activate_trailing_stop(ticket, current_price, tp_settings)
+                                        print(f"[PC2] Trailing stop activated for {ticket}")
+
+                                        # Set PC2 trigger time for 60-min time limit
+                                        from utils.time_utils import get_current_time
+                                        tracked_pos['pc2_trigger_time'] = get_current_time()
+
+                                        # ML LOGGING: Log PC2 trigger with trailing activation
+                                        if self.ml_logger:
+                                            trailing_distance = tracked_pos.get('trailing_stop_distance_pips', 0)
+                                            trailing_stop_price = tracked_pos.get('trailing_stop_price', 0)
+                                            entry_price = tracked_pos['entry_price']
+                                            self.ml_logger.log_pc2_trigger(
+                                                ticket=ticket,
+                                                symbol=symbol,
+                                                current_price=current_price,
+                                                entry_price=entry_price,
+                                                trailing_distance_pips=trailing_distance,
+                                                trailing_stop_price=trailing_stop_price
+                                            )
+
+                                    # Move hardware SL to breakeven (entry price) for protection
+                                    entry_price = tracked_pos['entry_price']
+                                    if self.mt5.modify_position(ticket, sl=entry_price):
+                                        print(f"[PC2] Hardware SL moved to breakeven @ {entry_price:.5f}")
+
+                                        # ML LOGGING: Log SL move to breakeven
+                                        if self.ml_logger:
+                                            self.ml_logger.log_sl_to_breakeven(
+                                                ticket=ticket,
+                                                symbol=symbol,
+                                                breakeven_price=entry_price
+                                            )
+
+                                except Exception as e:
+                                    print(f"[WARN] PC2 trigger error for {ticket}: {e}")
+
+            # TRAILING STOP SYSTEM: ONLY for positive original positions with trailing active
+            # Recovery system manages underwater positions separately with grid/DCA/hedge
             if ticket in self.recovery_manager.tracked_positions:
-                # Check recovery triggers
+                tracked_pos = self.recovery_manager.tracked_positions[ticket]
+
+                # ONLY process trailing if: position is profitable AND no active recovery
+                has_active_recovery = tracked_pos.get('recovery_active', False)
+                is_trailing_active = tracked_pos.get('trailing_stop_active', False)
+                is_positive = position['profit'] > 0
+
+                # Skip trailing stop logic if position is in recovery mode (underwater)
+                if has_active_recovery or not is_positive or not is_trailing_active:
+                    # Position is either:
+                    # - In active recovery (grid/DCA/hedge managing it) OR
+                    # - Negative (shouldn't have trailing) OR
+                    # - Trailing not activated yet
+                    # Let recovery system handle it, skip trailing stop logic
+                    pass
+                else:
+                    # Position is positive, standalone (no recovery), and trailing is active
+                    # Apply PC2 time limit and trailing stop checks
+
+                    # Check PC2 time limit (60 min) - close remaining 50% if time elapsed
+                    pc2_time = tracked_pos.get('pc2_trigger_time')
+                    if pc2_time:
+                        from utils.time_utils import get_current_time
+                        from datetime import timedelta
+                        time_since_pc2 = get_current_time() - pc2_time
+                        if time_since_pc2 >= timedelta(minutes=60):
+                            print(f"[PC2 TIME LIMIT] 60 min elapsed since PC2 for {ticket} - closing position")
+                            if self.mt5.close_position(ticket):
+                                # ML LOGGING: Log time-based exit
+                                if self.ml_logger:
+                                    entry_price = tracked_pos.get('entry_price', current_price)
+                                    peak_price = tracked_pos.get('highest_profit_price', current_price)
+                                    self.ml_logger.log_trailing_event(
+                                        event_type='pc2_time_limit',
+                                        ticket=ticket,
+                                        symbol=symbol,
+                                        time_since_pc2_minutes=float(time_since_pc2.total_seconds() / 60),
+                                        exit_price=float(current_price),
+                                        entry_price=float(entry_price),
+                                        peak_price=float(peak_price)
+                                    )
+                                self.recovery_manager.untrack_position(ticket)
+                                self.stats['trades_closed'] += 1
+                            continue
+
+                    # Update trailing stop (moves stop with price as profit increases)
+                    # Store old stop for comparison
+                    old_stop = tracked_pos.get('trailing_stop_price', 0)
+
+                    # Update trailing stop
+                    self.recovery_manager.update_trailing_stop(ticket, current_price)
+
+                    # Check if stop moved and log the update
+                    new_stop = tracked_pos.get('trailing_stop_price', 0)
+                    if new_stop != old_stop and self.ml_logger:
+                        pip_value = symbol_info.get('point', 0.0001)
+                        pips_moved = abs(new_stop - old_stop) / (pip_value * 10)
+                        self.ml_logger.log_trailing_update(
+                            ticket=ticket,
+                            symbol=symbol,
+                            old_stop=old_stop,
+                            new_stop=new_stop,
+                            current_price=current_price,
+                            pips_moved=pips_moved
+                        )
+
+                    # Update hardware SL to match software trailing stop (crash protection)
+                    trailing_stop_price = tracked_pos.get('trailing_stop_price')
+                    if trailing_stop_price:
+                        self.mt5.modify_position(ticket, sl=trailing_stop_price)
+
+                    # Check if trailing stop hit
+                    if self.recovery_manager.check_trailing_stop(ticket, current_price):
+                        print(f"[TRAIL] Trailing stop hit for {ticket} - closing position")
+
+                        # ML LOGGING: Log trailing stop hit with peak price and capture ratio
+                        if self.ml_logger:
+                            entry_price = tracked_pos.get('entry_price', current_price)
+                            peak_price = tracked_pos.get('highest_profit_price', current_price)
+                            self.ml_logger.log_trailing_hit(
+                                ticket=ticket,
+                                symbol=symbol,
+                                trailing_stop_price=trailing_stop_price,
+                                current_price=current_price,
+                                entry_price=entry_price,
+                                peak_price=peak_price
+                            )
+
+                        if self.mt5.close_position(ticket):
+                            self.recovery_manager.untrack_position(ticket)
+                            self.stats['trades_closed'] += 1
+                        continue
+
+            # RECOVERY & EXIT CONDITIONS: For UNDERWATER positions with active recovery
+            # This handles positions that went negative and need grid/DCA/hedge management
+            # Positive positions without recovery are handled by PC1/PC2/trailing above
+            if ticket in self.recovery_manager.tracked_positions:
+                # Check recovery triggers (grid, DCA, hedge for underwater positions)
                 recovery_actions = self.recovery_manager.check_all_recovery_triggers(
                     ticket, current_price, pip_value
                 )
