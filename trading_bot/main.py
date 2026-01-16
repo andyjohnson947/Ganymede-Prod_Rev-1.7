@@ -51,20 +51,19 @@ from ml_system.continuous_logger import ContinuousMLLogger
 import threading
 
 # Global variables for continuous logger
-_logger_thread = None
-_logger_instance = None
-_logger_running = False
-_backfill_complete = threading.Event()  # Signal when backfill is done
+_logger_instance = None  # Shared logger instance for manual logging if needed
 
 
-def start_continuous_logger(login, password, server):
-    """Start continuous ML logger in background thread"""
-    global _logger_thread, _logger_instance, _logger_running, _backfill_complete
+def start_continuous_logger_with_backfill(login, password, server):
+    """
+    Initialize continuous logger and run backfill synchronously
+
+    Threading fix: Runs backfill in main thread to avoid MT5 API conflicts.
+    Background monitoring is disabled to prevent concurrent MT5 API access.
+    """
+    global _logger_instance
 
     try:
-        # Reset backfill event
-        _backfill_complete.clear()
-
         # Threading fix: Reuse existing MT5 connection from main thread
         # This prevents MT5 API conflicts when connecting in multiple threads
         _logger_instance = ContinuousMLLogger(use_existing_connection=True)
@@ -73,60 +72,33 @@ def start_continuous_logger(login, password, server):
             logger.warning("Failed to connect continuous logger to MT5")
             return False
 
-        _logger_running = True
+        logger.info("[OK] Continuous logger connected")
+        logger.info("[INFO] Tracking: Entry + Recovery (DCA/Hedge) + Grid + Partials")
 
-        # Run logger in background thread
-        def logger_worker():
-            global _logger_running, _backfill_complete
-            try:
-                logger.info("[OK] Continuous logger connected")
-                logger.info("[INFO] Tracking: Entry + Recovery (DCA/Hedge) + Grid + Partials")
+        # Run backfill SYNCHRONOUSLY in main thread (no threading conflicts)
+        logger.info("[INFO] Checking for missed trades...")
+        try:
+            _logger_instance.backfill_missed_trades()
+            logger.info("[OK] Backfill completed")
+        except Exception as e:
+            logger.error(f"[ERROR] Backfill failed: {e}")
+            import traceback
+            traceback.print_exc()
+            logger.info("[INFO] Continuing without backfill...")
 
-                # Backfill any missed trades while logger was offline
-                logger.info("[INFO] Checking for missed trades...")
-
-                # Run backfill with timeout and error handling
-                try:
-                    _logger_instance.backfill_missed_trades()
-                    logger.info("[OK] Backfill completed")
-                except Exception as e:
-                    logger.error(f"[ERROR] Backfill failed: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    logger.info("[INFO] Continuing without backfill...")
-                finally:
-                    # Signal that backfill is complete (success or failure)
-                    _backfill_complete.set()
-
-                while _logger_running:
-                    try:
-                        _logger_instance.check_for_new_trades()
-                        _logger_instance.update_closed_trades()
-                        threading.Event().wait(60)  # Check every 60 seconds
-                    except Exception as e:
-                        if _logger_running:
-                            logger.error(f"Logger check failed: {e}")
-                        threading.Event().wait(60)
-            except Exception as e:
-                logger.error(f"Logger thread crashed: {e}")
-
-        _logger_thread = threading.Thread(target=logger_worker, daemon=True)
-        _logger_thread.start()
+        # Note: Background monitoring disabled to prevent MT5 API threading conflicts
+        # The strategy will handle trade execution, logger captures historical data
 
         return True
     except Exception as e:
-        logger.error(f"Failed to start continuous logger: {e}")
+        logger.error(f"Failed to initialize continuous logger: {e}")
         return False
 
 
 def stop_continuous_logger():
-    """Stop continuous ML logger"""
-    global _logger_thread, _logger_instance, _logger_running
-
-    _logger_running = False
-    # Don't wait for thread - daemon will exit automatically
-    # Avoids KeyboardInterrupt issues during shutdown
-    logger.info("Stopping continuous logger...")
+    """Cleanup continuous ML logger (no-op since we run synchronously)"""
+    # No background thread to stop anymore
+    pass
 
 
 def parse_arguments():
@@ -255,15 +227,9 @@ def main():
     start_ml_system()
     logger.info("[OK] ML System started (retraining every 8h, reports daily at 8 AM)")
 
-    # Start Continuous Logger (captures all trades automatically)
+    # Start Continuous Logger and run backfill (synchronously to avoid threading issues)
     logger.info("Starting Continuous Trade Logger...")
-    if start_continuous_logger(args.login, args.password, args.server):
-        logger.info("[OK] Continuous logger started (60s check interval)")
-        # Wait for backfill to complete before starting strategy
-        # This prevents MT5 API conflicts between threads
-        logger.info("[INFO] Waiting for backfill to complete...")
-        _backfill_complete.wait(timeout=120)  # Wait max 2 minutes
-    else:
+    if not start_continuous_logger_with_backfill(args.login, args.password, args.server):
         logger.warning("[WARN] Continuing without continuous logger")
 
     try:
