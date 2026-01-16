@@ -93,11 +93,10 @@ class ContinuousMLLogger:
 
         if self.use_existing_connection:
             # Reuse existing MT5 connection from main thread
-            # Don't call mt5.initialize() or mt5.login() again - just use the module
-            if mt5.account_info() is not None:
-                self.mt5 = mt5
-                return True
-            return False
+            # IMPORTANT: Don't make ANY MT5 API calls here - just reuse the module
+            # The connection was already established by MT5Manager in the main thread
+            self.mt5 = mt5
+            return True
         else:
             # Standalone mode: Create new connection (for backwards compatibility)
             if mt5.initialize() and mt5.login(login, password, server):
