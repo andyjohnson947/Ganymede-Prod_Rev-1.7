@@ -52,16 +52,19 @@ import threading
 
 # Global variables for continuous logger
 _logger_instance = None  # Shared logger instance for manual logging if needed
+_logger_thread = None
+_logger_running = False
+mt5_api_lock = threading.Lock()  # Global lock for thread-safe MT5 API access
 
 
 def start_continuous_logger_with_backfill(login, password, server):
     """
-    Initialize continuous logger and run backfill synchronously
+    Initialize continuous logger and run backfill, then start background monitoring
 
-    Threading fix: Runs backfill in main thread to avoid MT5 API conflicts.
-    Background monitoring is disabled to prevent concurrent MT5 API access.
+    Threading fix: Uses shared lock (mt5_api_lock) to serialize MT5 API access.
+    Backfill runs once in main thread, then logger monitors continuously in background.
     """
-    global _logger_instance
+    global _logger_instance, _logger_thread, _logger_running
 
     try:
         # Threading fix: Reuse existing MT5 connection from main thread
@@ -75,10 +78,11 @@ def start_continuous_logger_with_backfill(login, password, server):
         logger.info("[OK] Continuous logger connected")
         logger.info("[INFO] Tracking: Entry + Recovery (DCA/Hedge) + Grid + Partials")
 
-        # Run backfill SYNCHRONOUSLY in main thread (no threading conflicts)
+        # Run backfill ONCE in main thread (using lock for thread safety)
         logger.info("[INFO] Checking for missed trades...")
         try:
-            _logger_instance.backfill_missed_trades()
+            with mt5_api_lock:
+                _logger_instance.backfill_missed_trades()
             logger.info("[OK] Backfill completed")
         except Exception as e:
             logger.error(f"[ERROR] Backfill failed: {e}")
@@ -86,8 +90,28 @@ def start_continuous_logger_with_backfill(login, password, server):
             traceback.print_exc()
             logger.info("[INFO] Continuing without backfill...")
 
-        # Note: Background monitoring disabled to prevent MT5 API threading conflicts
-        # The strategy will handle trade execution, logger captures historical data
+        # Start continuous monitoring in background thread
+        _logger_running = True
+
+        def logger_worker():
+            global _logger_running
+            try:
+                while _logger_running:
+                    try:
+                        # Use lock to prevent MT5 API conflicts with main strategy
+                        with mt5_api_lock:
+                            _logger_instance.check_for_new_trades()
+                            _logger_instance.update_closed_trades()
+                    except Exception as e:
+                        if _logger_running:
+                            logger.error(f"Logger check failed: {e}")
+                    threading.Event().wait(60)  # Check every 60 seconds
+            except Exception as e:
+                logger.error(f"Logger thread crashed: {e}")
+
+        _logger_thread = threading.Thread(target=logger_worker, daemon=True)
+        _logger_thread.start()
+        logger.info("[OK] Continuous monitoring started (60s interval)")
 
         return True
     except Exception as e:
@@ -96,9 +120,10 @@ def start_continuous_logger_with_backfill(login, password, server):
 
 
 def stop_continuous_logger():
-    """Cleanup continuous ML logger (no-op since we run synchronously)"""
-    # No background thread to stop anymore
-    pass
+    """Stop continuous ML logger background thread"""
+    global _logger_running
+    _logger_running = False
+    logger.info("Stopping continuous logger...")
 
 
 def parse_arguments():
@@ -215,7 +240,8 @@ def main():
     mt5_manager = MT5Manager(
         login=args.login,
         password=args.password,
-        server=args.server
+        server=args.server,
+        api_lock=mt5_api_lock  # Pass lock for thread-safe API access
     )
 
     if not mt5_manager.connect():
@@ -231,6 +257,18 @@ def main():
     logger.info("Starting Continuous Trade Logger...")
     if not start_continuous_logger_with_backfill(args.login, args.password, args.server):
         logger.warning("[WARN] Continuing without continuous logger")
+
+    # DEBUG: Verify MT5 connection is still valid after backfill
+    logger.info("[DEBUG] Verifying MT5 connection after backfill...")
+    test_account = mt5_manager.get_account_info()
+    if test_account:
+        logger.info(f"[DEBUG] MT5 connection OK - Balance: ${test_account['balance']:.2f}")
+    else:
+        logger.error("[DEBUG] MT5 connection FAILED after backfill - reconnecting...")
+        mt5_manager.disconnect()
+        if not mt5_manager.connect():
+            logger.error("Failed to reconnect to MT5")
+            sys.exit(1)
 
     try:
         # Initialize strategy
