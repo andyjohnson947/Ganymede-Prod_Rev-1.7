@@ -383,7 +383,8 @@ class ConfluenceStrategy:
                 if partial_action:
                     # Execute partial close
                     close_volume = partial_action['close_volume']
-                    print(f" Partial close: {ticket} - {partial_action['close_percent']}% at {partial_action['level_percent']}% to TP")
+                    level_percent = partial_action['level_percent']
+                    print(f" Partial close: {ticket} - {partial_action['close_percent']}% at {level_percent}% to TP")
 
                     # Check if close_volume equals or exceeds position volume (final close)
                     if close_volume >= position['volume']:
@@ -400,6 +401,50 @@ class ConfluenceStrategy:
 
                         if self.mt5.close_partial_position(ticket, close_volume, comment=partial_comment):
                             print(f"[OK] Partial close successful: {close_volume} lots - {partial_comment}")
+
+                            # PC2 TRIGGERS: Activate trailing stop + move SL to breakeven
+                            if level_percent >= 50 and ticket in self.recovery_manager.tracked_positions:
+                                tracked_pos = self.recovery_manager.tracked_positions[ticket]
+
+                                # Get instrument config for trailing settings
+                                try:
+                                    from trading_bot.portfolio.instruments_config import INSTRUMENTS
+                                    instrument_config = INSTRUMENTS.get(symbol, {})
+                                    tp_settings = instrument_config.get('take_profit', {})
+
+                                    # Activate trailing stop if enabled
+                                    if tp_settings.get('trailing_stop_enabled') and not tracked_pos.get('trailing_stop_active'):
+                                        self.recovery_manager.activate_trailing_stop(ticket, current_price, tp_settings)
+                                        print(f"[PC2] Trailing stop activated for {ticket}")
+
+                                    # Move hardware SL to breakeven (entry price) for protection
+                                    entry_price = tracked_pos['entry_price']
+                                    if self.mt5.modify_position(ticket, sl=entry_price):
+                                        print(f"[PC2] Hardware SL moved to breakeven @ {entry_price:.5f}")
+
+                                except Exception as e:
+                                    print(f"[WARN] PC2 trigger error for {ticket}: {e}")
+
+            # TRAILING STOP SYSTEM: Check and update trailing stops for tracked positions
+            if ticket in self.recovery_manager.tracked_positions:
+                tracked_pos = self.recovery_manager.tracked_positions[ticket]
+
+                # Update trailing stop if active (moves stop with price)
+                if tracked_pos.get('trailing_stop_active'):
+                    self.recovery_manager.update_trailing_stop(ticket, current_price)
+
+                    # Update hardware SL to match software trailing stop (crash protection)
+                    trailing_stop_price = tracked_pos.get('trailing_stop_price')
+                    if trailing_stop_price:
+                        self.mt5.modify_position(ticket, sl=trailing_stop_price)
+
+                    # Check if trailing stop hit
+                    if self.recovery_manager.check_trailing_stop(ticket, current_price):
+                        print(f"[TRAIL] Trailing stop hit for {ticket} - closing position")
+                        if self.mt5.close_position(ticket):
+                            self.recovery_manager.untrack_position(ticket)
+                            self.stats['trades_closed'] += 1
+                        continue
 
             # RECOVERY & EXIT CONDITIONS: Only for tracked original positions
             if ticket in self.recovery_manager.tracked_positions:
