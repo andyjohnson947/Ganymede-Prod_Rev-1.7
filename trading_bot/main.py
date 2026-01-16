@@ -232,6 +232,18 @@ def main():
     if not start_continuous_logger_with_backfill(args.login, args.password, args.server):
         logger.warning("[WARN] Continuing without continuous logger")
 
+    # DEBUG: Verify MT5 connection is still valid after backfill
+    logger.info("[DEBUG] Verifying MT5 connection after backfill...")
+    test_account = mt5_manager.get_account_info()
+    if test_account:
+        logger.info(f"[DEBUG] MT5 connection OK - Balance: ${test_account['balance']:.2f}")
+    else:
+        logger.error("[DEBUG] MT5 connection FAILED after backfill - reconnecting...")
+        mt5_manager.disconnect()
+        if not mt5_manager.connect():
+            logger.error("Failed to reconnect to MT5")
+            sys.exit(1)
+
     try:
         # Initialize strategy
         strategy = ConfluenceStrategy(mt5_manager, test_mode=args.test_mode)
