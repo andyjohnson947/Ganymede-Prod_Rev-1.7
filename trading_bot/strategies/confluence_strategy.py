@@ -348,7 +348,7 @@ class ConfluenceStrategy:
             symbol_info = self.mt5.get_symbol_info(symbol)
             pip_value = symbol_info.get('point', 0.0001)
 
-            # PARTIAL CLOSE + TRAILING STOP: ONLY for profitable ORIGINAL positions
+            # PC1/PC2/TRAILING STOP: ONLY for profitable ORIGINAL positions
             # NOT for recovery orders (grid/DCA/hedge) or positions in active recovery
             # This is the new exit strategy for positive trades moving toward TP
 
@@ -366,108 +366,102 @@ class ConfluenceStrategy:
                 has_active_recovery = tracked_pos.get('recovery_active', False)
 
             # ONLY apply to positive original positions without active recovery
-            if self.partial_close_manager and position['profit'] > 0 and not is_recovery_order and not has_active_recovery:
-                # Track position if not already tracked
-                if ticket not in self.partial_close_manager.partial_closes:
-                    # Calculate TP price based on VWAP or other exit logic
-                    # For now, use a reasonable default TP
-                    entry_price = position['price_open']
-                    pos_type = 'buy' if position['type'] == 0 else 'sell'
+            if position['profit'] > 0 and not is_recovery_order and not has_active_recovery:
+                # Get instrument-specific PC1/PC2 levels from instruments_config
+                from trading_bot.portfolio.instruments_config import INSTRUMENTS
+                instrument_config = INSTRUMENTS.get(symbol, {})
+                tp_settings = instrument_config.get('take_profit', {})
 
-                    # Estimate TP price (40 pips for EURUSD, adjust as needed)
-                    tp_distance = 40 * pip_value
-                    tp_price = entry_price + tp_distance if pos_type == 'buy' else entry_price - tp_distance
-
-                    self.partial_close_manager.track_position(
-                        ticket=ticket,
-                        entry_price=entry_price,
-                        volume=position['volume'],
-                        position_type=pos_type,
-                        tp_price=tp_price
-                    )
+                pc1_pips = tp_settings.get('partial_1_pips', 10)
+                pc2_pips = tp_settings.get('partial_2_pips', 20)
+                pc1_percent = tp_settings.get('partial_1_percent', 0.25)
+                pc2_percent = tp_settings.get('partial_2_percent', 0.25)
 
                 # Calculate current profit in pips
                 entry_price = position['price_open']
                 current_price = position['price_current']
-                pip_diff = abs(current_price - entry_price) / pip_value
+                pos_type = 'buy' if position['type'] == 0 else 'sell'
 
-                # Check for partial close triggers
-                partial_action = self.partial_close_manager.check_partial_close_levels(
-                    ticket=ticket,
-                    current_price=current_price,
-                    current_profit_pips=pip_diff
-                )
+                if pos_type == 'buy':
+                    profit_pips = (current_price - entry_price) / pip_value
+                else:
+                    profit_pips = (entry_price - current_price) / pip_value
 
-                if partial_action:
-                    # Execute partial close
-                    close_volume = partial_action['close_volume']
-                    level_percent = partial_action['level_percent']
-                    print(f" Partial close: {ticket} - {partial_action['close_percent']}% at {level_percent}% to TP")
+                # Get tracked position state
+                if ticket not in self.recovery_manager.tracked_positions:
+                    # Start tracking if not already
+                    self.recovery_manager.track_position(
+                        ticket=ticket,
+                        symbol=symbol,
+                        entry_price=entry_price,
+                        position_type=pos_type,
+                        volume=position['volume']
+                    )
 
-                    # Check if close_volume equals or exceeds position volume (final close)
-                    if close_volume >= position['volume']:
-                        # Close entire position instead of partial
-                        if self.mt5.close_position(ticket):
-                            print(f"[OK] Full close successful: {position['volume']} lots (final partial close)")
-                            self.recovery_manager.untrack_position(ticket)
-                            self.stats['trades_closed'] += 1
-                    else:
-                        # Close partial volume with descriptive comment
-                        # Format: "PC 50%@50%TP-{last 5 digits}" (max 31 chars, Windows-safe)
-                        short_ticket = str(ticket)[-5:]  # Last 5 digits of ticket
-                        partial_comment = f"PC {partial_action['close_percent']}%@{partial_action['level_percent']}%TP-{short_ticket}"
+                tracked_pos = self.recovery_manager.tracked_positions[ticket]
+                pc1_closed = tracked_pos.get('partial_1_closed', False)
+                pc2_closed = tracked_pos.get('partial_2_closed', False)
 
-                        if self.mt5.close_partial_position(ticket, close_volume, comment=partial_comment):
-                            print(f"[OK] Partial close successful: {close_volume} lots - {partial_comment}")
+                # PC1 CHECK: Close 25% at 10 pips (EURUSD) or 12 pips (GBPUSD)
+                if not pc1_closed and profit_pips >= pc1_pips:
+                    close_volume = round(position['volume'] * pc1_percent, 2)
 
-                            # PC2 TRIGGERS: Activate trailing stop + move SL to breakeven
-                            if level_percent >= 50 and ticket in self.recovery_manager.tracked_positions:
-                                tracked_pos = self.recovery_manager.tracked_positions[ticket]
+                    if close_volume > 0 and close_volume < position['volume']:
+                        short_ticket = str(ticket)[-5:]
+                        pc1_comment = f"PC1-25%@{profit_pips:.0f}pips-{short_ticket}"
 
-                                # Get instrument config for trailing settings
-                                try:
-                                    from trading_bot.portfolio.instruments_config import INSTRUMENTS
-                                    instrument_config = INSTRUMENTS.get(symbol, {})
-                                    tp_settings = instrument_config.get('take_profit', {})
+                        if self.mt5.close_partial_position(ticket, close_volume, comment=pc1_comment):
+                            print(f"[PC1] {ticket} - Closed 25% @ +{profit_pips:.1f} pips = ${close_volume * profit_pips * 10:.2f}")
+                            tracked_pos['partial_1_closed'] = True
 
-                                    # Activate trailing stop if enabled
-                                    if tp_settings.get('trailing_stop_enabled') and not tracked_pos.get('trailing_stop_active'):
-                                        self.recovery_manager.activate_trailing_stop(ticket, current_price, tp_settings)
-                                        print(f"[PC2] Trailing stop activated for {ticket}")
+                            # DISABLE VWAP EXITS after PC1
+                            print(f"[PC1] VWAP exits disabled for {ticket}")
 
-                                        # Set PC2 trigger time for 60-min time limit
-                                        from utils.time_utils import get_current_time
-                                        tracked_pos['pc2_trigger_time'] = get_current_time()
+                # PC2 CHECK: Close another 25% at 20 pips (EURUSD) or 25 pips (GBPUSD)
+                elif pc1_closed and not pc2_closed and profit_pips >= pc2_pips:
+                    close_volume = round(position['volume'] * pc2_percent, 2)
 
-                                        # ML LOGGING: Log PC2 trigger with trailing activation
-                                        if self.ml_logger:
-                                            trailing_distance = tracked_pos.get('trailing_stop_distance_pips', 0)
-                                            trailing_stop_price = tracked_pos.get('trailing_stop_price', 0)
-                                            entry_price = tracked_pos['entry_price']
-                                            self.ml_logger.log_pc2_trigger(
-                                                ticket=ticket,
-                                                symbol=symbol,
-                                                current_price=current_price,
-                                                entry_price=entry_price,
-                                                trailing_distance_pips=trailing_distance,
-                                                trailing_stop_price=trailing_stop_price
-                                            )
+                    if close_volume > 0 and close_volume < position['volume']:
+                        short_ticket = str(ticket)[-5:]
+                        pc2_comment = f"PC2-25%@{profit_pips:.0f}pips-{short_ticket}"
 
-                                    # Move hardware SL to breakeven (entry price) for protection
-                                    entry_price = tracked_pos['entry_price']
-                                    if self.mt5.modify_position(ticket, sl=entry_price):
-                                        print(f"[PC2] Hardware SL moved to breakeven @ {entry_price:.5f}")
+                        if self.mt5.close_partial_position(ticket, close_volume, comment=pc2_comment):
+                            print(f"[PC2] {ticket} - Closed 25% (50% total) @ +{profit_pips:.1f} pips = ${close_volume * profit_pips * 10:.2f}")
+                            tracked_pos['partial_2_closed'] = True
 
-                                        # ML LOGGING: Log SL move to breakeven
-                                        if self.ml_logger:
-                                            self.ml_logger.log_sl_to_breakeven(
-                                                ticket=ticket,
-                                                symbol=symbol,
-                                                breakeven_price=entry_price
-                                            )
+                            # ACTIVATE TRAILING STOP
+                            if tp_settings.get('trailing_stop_enabled') and not tracked_pos.get('trailing_stop_active'):
+                                self.recovery_manager.activate_trailing_stop(ticket, current_price, tp_settings)
+                                print(f"[PC2] Trailing stop activated for {ticket}")
 
-                                except Exception as e:
-                                    print(f"[WARN] PC2 trigger error for {ticket}: {e}")
+                                # Set PC2 trigger time for 60-min limit
+                                from utils.time_utils import get_current_time
+                                tracked_pos['pc2_trigger_time'] = get_current_time()
+
+                                # ML LOGGING: Log PC2 trigger
+                                if self.ml_logger:
+                                    trailing_distance = tracked_pos.get('trailing_stop_distance_pips', 0)
+                                    trailing_stop_price = tracked_pos.get('trailing_stop_price', 0)
+                                    self.ml_logger.log_pc2_trigger(
+                                        ticket=ticket,
+                                        symbol=symbol,
+                                        current_price=current_price,
+                                        entry_price=entry_price,
+                                        trailing_distance_pips=trailing_distance,
+                                        trailing_stop_price=trailing_stop_price
+                                    )
+
+                            # MOVE HARDWARE SL TO BREAKEVEN
+                            if self.mt5.modify_position(ticket, sl=entry_price):
+                                print(f"[PC2] Hardware SL → breakeven @ {entry_price:.5f}")
+
+                                # ML LOGGING: Log SL to BE
+                                if self.ml_logger:
+                                    self.ml_logger.log_sl_to_breakeven(
+                                        ticket=ticket,
+                                        symbol=symbol,
+                                        breakeven_price=entry_price
+                                    )
 
             # TRAILING STOP SYSTEM: ONLY for positive original positions with trailing active
             # Recovery system manages underwater positions separately with grid/DCA/hedge
@@ -704,22 +698,64 @@ class ConfluenceStrategy:
                     self._close_recovery_stack(ticket)
                     continue
 
-            # 3. Check exit signal (VWAP reversion) - for tracked positions
+            # 3. Check exit signal (VWAP reversion) - WITH FILTERING
             if symbol in self.market_data_cache:
                 h1_data = self.market_data_cache[symbol]['h1']
                 should_exit = self.signal_detector.check_exit_signal(position, h1_data)
 
                 if should_exit:
-                    print(f"Exit signal detected for {ticket} - VWAP reversion")
+                    # VWAP EXIT FILTERING: Only allow if conditions met
+                    allow_vwap_exit = True
 
-                    # Check if this is a tracked position with recovery stack
+                    # Get instrument VWAP exit settings
+                    from trading_bot.portfolio.instruments_config import INSTRUMENTS
+                    instrument_config = INSTRUMENTS.get(symbol, {})
+                    tp_settings = instrument_config.get('take_profit', {})
+                    vwap_exit_enabled = tp_settings.get('vwap_exit_enabled', True)
+                    vwap_exit_max_pips = tp_settings.get('vwap_exit_max_pips', 10)
+
+                    # Check if this is a tracked position
                     if ticket in self.recovery_manager.tracked_positions:
-                        print(f"Closing entire recovery stack for {ticket}")
-                        self._close_recovery_stack(ticket)
-                    else:
-                        # Standalone position (no recovery) - close normally
-                        if self.mt5.close_position(ticket):
-                            self.stats['trades_closed'] += 1
+                        tracked_pos = self.recovery_manager.tracked_positions[ticket]
+                        pc1_closed = tracked_pos.get('partial_1_closed', False)
+
+                        # Calculate current profit in pips
+                        entry_price = position['price_open']
+                        current_price = position['price_current']
+                        symbol_info = self.mt5.get_symbol_info(symbol)
+                        pip_value = symbol_info.get('point', 0.0001)
+
+                        pos_type = 'buy' if position['type'] == 0 else 'sell'
+                        if pos_type == 'buy':
+                            profit_pips = (current_price - entry_price) / pip_value
+                        else:
+                            profit_pips = (entry_price - current_price) / pip_value
+
+                        # DISABLE VWAP exit if:
+                        # 1. PC1 already triggered (new exit strategy active) OR
+                        # 2. Profit >= max_pips (position should wait for PC1/PC2) OR
+                        # 3. VWAP exit disabled in config
+                        if pc1_closed:
+                            allow_vwap_exit = False
+                            print(f"[VWAP] Exit blocked for {ticket} - PC1 triggered (new exit strategy active)")
+                        elif profit_pips >= vwap_exit_max_pips:
+                            allow_vwap_exit = False
+                            print(f"[VWAP] Exit blocked for {ticket} - Profit {profit_pips:.1f} pips >= {vwap_exit_max_pips} (waiting for PC1)")
+                        elif not vwap_exit_enabled:
+                            allow_vwap_exit = False
+
+                    # Execute VWAP exit only if allowed
+                    if allow_vwap_exit:
+                        print(f"[VWAP] Exit signal detected for {ticket} - VWAP reversion")
+
+                        # Check if this is a tracked position with recovery stack
+                        if ticket in self.recovery_manager.tracked_positions:
+                            print(f"[VWAP] Closing entire recovery stack for {ticket}")
+                            self._close_recovery_stack(ticket)
+                        else:
+                            # Standalone position (no recovery) - close normally
+                            if self.mt5.close_position(ticket):
+                                self.stats['trades_closed'] += 1
 
         # Check for orphaned hedges (hedges whose original positions are gone)
         self._check_orphaned_hedges()
